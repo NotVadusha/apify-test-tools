@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 
 - **config/modes:** Lay groundwork for multiple configuration structures ([#142](https://github.com/apify/apify-test-tools/pull/142)) ([7e18638](https://github.com/apify/apify-test-tools/commit/7e18638a8d3523154dbe819312c2b16b54c548ff)) by [@JuanGalilea](https://github.com/JuanGalilea)
 - **workflows:** Host the reusable GitHub workflows in this repo ([#120](https://github.com/apify/apify-test-tools/pull/120)) ([10f089d](https://github.com/apify/apify-test-tools/commit/10f089d85146ceb7cdae964cfa1fc2577df43a37)) by [@metalwarrior665](https://github.com/metalwarrior665)
+- **mode:** Add grouped config mode ([#143](https://github.com/apify/apify-test-tools/pull/143)) ([9d0b93e](https://github.com/apify/apify-test-tools/commit/9d0b93e194a2cd810a31bcef4ca9457fd9ebfb9b)) by [@JuanGalilea](https://github.com/JuanGalilea)
 
 ### 🐛 Bug Fixes
 
