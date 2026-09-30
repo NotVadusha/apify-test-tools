@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 ### 🚜 Refactor
 
 - **workflows:** [**breaking**] Rename the floating tag to workflows-v0 ([#146](https://github.com/apify/apify-test-tools/pull/146)) ([c48fb22](https://github.com/apify/apify-test-tools/commit/c48fb223c885c4e5de7e5f64d8c14f6d03fcc7de)) by [@metalwarrior665](https://github.com/metalwarrior665)
+- **bin:** [**breaking**] Remove GitHub event dependency from release command ([#153](https://github.com/apify/apify-test-tools/pull/153)) ([e6953aa](https://github.com/apify/apify-test-tools/commit/e6953aa095d1a92638c6d72441e1b312d9f835c3)) by [@metalwarrior665](https://github.com/metalwarrior665), closes [#131](https://github.com/apify/apify-test-tools/issues/131)
 
 
 <!-- git-cliff-unreleased-end -->
