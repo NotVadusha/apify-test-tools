@@ -2,8 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-<!-- git-cliff-unreleased-start -->
-## 0.9.1 - **not yet released**
+## [0.10.0](https://github.com/apify/apify-test-tools/releases/tag/v0.10.0) (2026-09-30)
 
 ### 🚀 Features
 
@@ -22,7 +21,6 @@ All notable changes to this project will be documented in this file.
 - **bin:** [**breaking**] Remove GitHub event dependency from release command ([#153](https://github.com/apify/apify-test-tools/pull/153)) ([e6953aa](https://github.com/apify/apify-test-tools/commit/e6953aa095d1a92638c6d72441e1b312d9f835c3)) by [@metalwarrior665](https://github.com/metalwarrior665), closes [#131](https://github.com/apify/apify-test-tools/issues/131)
 
 
-<!-- git-cliff-unreleased-end -->
 ## [0.9.0](https://github.com/apify/apify-test-tools/releases/tag/v0.9.0) (2026-08-11)
 
 ### 🚀 Features
