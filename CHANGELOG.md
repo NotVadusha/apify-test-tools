@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+<!-- git-cliff-unreleased-start -->
+## 0.10.1 - **not yet released**
+
+### 🐛 Bug Fixes
+
+- **internal-workflows:** Wait out npm&#x27;s async publish before holding the major tag ([#160](https://github.com/apify/apify-test-tools/pull/160)) ([78434f0](https://github.com/apify/apify-test-tools/commit/78434f03d288ecbd383d55d56a1610f06ded298f)) by [@metalwarrior665](https://github.com/metalwarrior665)
+
+
+<!-- git-cliff-unreleased-end -->
 ## [0.10.0](https://github.com/apify/apify-test-tools/releases/tag/v0.10.0) (2026-09-30)
 
 ### 🚀 Features
