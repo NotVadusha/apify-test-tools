@@ -1,6 +1,7 @@
 import type { ActorVersionClient } from 'apify-client';
 import { ApifyApiError } from 'apify-client';
 
+import { logger } from './logger.js';
 import type { ActorConfig } from './types.js';
 
 export type ResolvedActorEnvVar = {
@@ -33,7 +34,7 @@ export const resolveActorEnvVars = (
 export const logSelectedActorEnvVars = (actorConfig: ActorConfig, isLatest: boolean): void => {
     for (const [name, definition] of Object.entries(actorConfig.envVars ?? {})) {
         if (!isLatest && definition.isShared !== true) continue;
-        console.error(
+        logger.info(
             `    ${name} <- ${definition.fromEnv} (isSecret: ${definition.isSecret}, isShared: ${definition.isShared === true})`,
         );
     }

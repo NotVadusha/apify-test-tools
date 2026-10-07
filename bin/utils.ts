@@ -2,13 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { ActorVersionSourceFile } from 'apify-client';
-
-import { SOURCE_FILE_FORMATS } from '@apify/consts';
-
-import { selectActors } from './actor-filtering.js';
-import { isPathWithinScope } from './path-utils.js';
-import type { ActorConfig, ActorConfigFile, ActorEnvVarConfig } from './types.js';
+import { logger } from './logger.js';
 
 // Returns true when `childPath` is not inside `parentPath`.
 // Used to detect monorepo actors whose dockerContextDir escapes the actor directory.
@@ -59,18 +53,15 @@ export const getGitignoredPaths = (relativePaths: string[]): Set<string> => {
     return new Set(result.stdout.toString().split('\n').filter(Boolean));
 };
 
-const isBinary = (buffer: Buffer): boolean => buffer.includes(0);
+export type SourceFile = { name: string; content: Buffer };
 
-export const toActorVersionSourceFile = async (absPath: string, rootDir: string): Promise<ActorVersionSourceFile> => {
-    const buffer = await fs.readFile(absPath);
-    const name = path.relative(rootDir, absPath).split(path.sep).join('/');
-    return isBinary(buffer)
-        ? { name, format: SOURCE_FILE_FORMATS.BASE64, content: buffer.toString('base64') }
-        : { name, format: SOURCE_FILE_FORMATS.TEXT, content: buffer.toString('utf8') };
-};
+export const readSourceFile = async (absPath: string, rootDir: string): Promise<SourceFile> => ({
+    name: path.relative(rootDir, absPath).split(path.sep).join('/'),
+    content: await fs.readFile(absPath),
+});
 
-export const spawnCommandInGhWorkspace = (command: string, args: string[] = []) => {
-    console.error(command, args.join(' '));
+export const spawnCommand = (command: string, args: string[] = []) => {
+    logger.info(command, args.join(' '));
     const commandResult = spawnSync(command, args, { shell: true, maxBuffer: 100 * 1024 * 1024 });
 
     if (commandResult.error) {
@@ -93,194 +84,4 @@ export const getEnvVar = (varName: string, defaultValue?: string): string => {
         throw new Error(`${varName} not defined`);
     }
     return value;
-};
-
-export const CONFIG_FILE_NAME = 'apify-test-tools.config.json';
-
-// Strips a trailing slash so config-declared paths ("actors/shopify/" vs "actors/shopify") compare equal.
-const stripTrailingSlash = (pathValue: string): string => pathValue.replace(/\/+$/, '');
-
-const findOverlappingContextPaths = (contextPaths: string[]): [string, string] | undefined => {
-    for (let i = 0; i < contextPaths.length; i++) {
-        for (let j = i + 1; j < contextPaths.length; j++) {
-            if (
-                isPathWithinScope(contextPaths[i], contextPaths[j]) ||
-                isPathWithinScope(contextPaths[j], contextPaths[i])
-            ) {
-                return [contextPaths[i], contextPaths[j]];
-            }
-        }
-    }
-    return undefined;
-};
-
-/**
- * Validates the optional envVars map read from the actor configuration JSON.
- * Each nonblank variable name must map to an object with a nonblank fromEnv string,
- * a boolean isSecret, and an optional boolean isShared.
- * Throws on invalid configuration; otherwise returns the original map or undefined.
- */
-const validateActorEnvVarsConfig = (
-    entry: ActorConfigFile['actors'][number],
-    index: number,
-): Record<string, ActorEnvVarConfig> | undefined => {
-    if (entry.envVars === undefined) return undefined;
-
-    if (typeof entry.envVars !== 'object' || entry.envVars === null || Array.isArray(entry.envVars)) {
-        throw new Error(`Invalid "envVars" for actor entry at index ${index} in "${CONFIG_FILE_NAME}". Must be a map.`);
-    }
-
-    for (const [name, definition] of Object.entries(entry.envVars)) {
-        if (!name.trim()) {
-            throw new Error(
-                `Environment variable name must not be empty at actor entry ${index} in "${CONFIG_FILE_NAME}".`,
-            );
-        }
-
-        if (typeof definition !== 'object' || definition === null || Array.isArray(definition)) {
-            throw new Error(
-                `Environment variable "${name}" must be an object at actor entry ${index} in "${CONFIG_FILE_NAME}".`,
-            );
-        }
-
-        const { fromEnv, isSecret, isShared } = definition;
-        if (typeof fromEnv !== 'string' || !fromEnv.trim()) {
-            throw new Error(`Environment variable "${name}" needs a non-empty "fromEnv" at actor entry ${index}.`);
-        }
-        if (typeof isSecret !== 'boolean') {
-            throw new Error(`Environment variable "${name}" needs a boolean "isSecret" at actor entry ${index}.`);
-        }
-        if (isShared !== undefined && typeof isShared !== 'boolean') {
-            throw new Error(`Environment variable "${name}" needs a boolean "isShared" at actor entry ${index}.`);
-        }
-    }
-
-    return entry.envVars;
-};
-
-export const readConfigFile = async (selection: { actors: string[]; ignore: string[] }): Promise<ActorConfig[]> => {
-    let raw: string;
-    try {
-        raw = await fs.readFile(CONFIG_FILE_NAME, 'utf-8');
-    } catch {
-        throw new Error(
-            `Config file "${CONFIG_FILE_NAME}" not found in the current directory. ` +
-                `Please create one with the required actor entries.`,
-        );
-    }
-
-    let config: ActorConfigFile;
-    try {
-        config = JSON.parse(raw);
-    } catch {
-        throw new Error(`Config file "${CONFIG_FILE_NAME}" contains invalid JSON.`);
-    }
-
-    if (!Array.isArray(config.actors)) {
-        throw new Error(`Config file "${CONFIG_FILE_NAME}" must have an "actors" array at the top level.`);
-    }
-
-    const seenFolders = new Set<string>();
-    const actorConfigs: ActorConfig[] = [];
-
-    for (const [index, entry] of config.actors.entries()) {
-        if (typeof entry.folder !== 'string') {
-            throw new Error(
-                `Invalid "folder" for actor entry at index ${index} in "${CONFIG_FILE_NAME}". ` +
-                    `Must be a string (use "." for a single-actor repo).`,
-            );
-        }
-
-        const folder = entry.folder === '.' ? '' : stripTrailingSlash(entry.folder);
-
-        if (seenFolders.has(folder)) {
-            throw new Error(
-                `Duplicate folder "${entry.folder}" in "${CONFIG_FILE_NAME}". Each actor must have a unique folder.`,
-            );
-        }
-        seenFolders.add(folder);
-
-        const nameParts = entry.actorFullName?.split('/');
-        if (!nameParts || nameParts.length !== 2 || !nameParts[0] || !nameParts[1]) {
-            throw new Error(
-                `Invalid "actorFullName" for folder "${entry.folder}" in "${CONFIG_FILE_NAME}". ` +
-                    `Must be in "owner/name" format (e.g. "apify/web-scraper").`,
-            );
-        }
-
-        if (entry.overrideActorContext !== undefined) {
-            if (
-                !Array.isArray(entry.overrideActorContext) ||
-                !entry.overrideActorContext.every((p) => typeof p === 'string')
-            ) {
-                throw new Error(
-                    `Invalid "overrideActorContext" for folder "${entry.folder}" in "${CONFIG_FILE_NAME}". ` +
-                        `Must be an array of strings.`,
-                );
-            }
-        }
-
-        const envVars = validateActorEnvVarsConfig(entry, index);
-
-        const actorJsonPath = folder ? `${folder}/.actor/actor.json` : '.actor/actor.json';
-
-        let actorJson: { dockerContextDir?: string };
-        try {
-            actorJson = JSON.parse(await fs.readFile(actorJsonPath, 'utf-8'));
-        } catch {
-            throw new Error(
-                `Cannot read "${actorJsonPath}". Every actor entry in "${CONFIG_FILE_NAME}" ` +
-                    `must have a corresponding .actor/actor.json file.`,
-            );
-        }
-
-        const actorDotDir = folder ? `${folder}/.actor` : '.actor';
-        const rawDockerContextDir = actorJson.dockerContextDir ?? '..';
-        const resolved = path.resolve(process.cwd(), actorDotDir, rawDockerContextDir);
-        const dockerContextDir = path.relative(process.cwd(), resolved);
-
-        if (dockerContextDir.startsWith('..')) {
-            throw new Error(
-                `"dockerContextDir" for folder "${entry.folder}" resolves outside the repository root. ` +
-                    `Resolved path: "${dockerContextDir}".`,
-            );
-        }
-
-        const normalizedDockerContextDir = dockerContextDir === '.' ? '' : dockerContextDir;
-        const contextPaths = (entry.overrideActorContext ?? [normalizedDockerContextDir]).map(stripTrailingSlash);
-
-        // The actor's own folder is always part of its context. When an explicit "overrideActorContext"
-        // doesn't already cover it, add it automatically instead of failing the workflow.
-        if (!contextPaths.some((contextPath) => isPathWithinScope(folder, contextPath))) {
-            contextPaths.push(folder);
-        }
-
-        const overlap = findOverlappingContextPaths(contextPaths);
-        if (overlap) {
-            throw new Error(
-                `Invalid context paths for folder "${entry.folder}" in "${CONFIG_FILE_NAME}": ` +
-                    `"${overlap[0]}" and "${overlap[1]}" overlap. Context paths must not be prefixes of one another.`,
-            );
-        }
-
-        actorConfigs.push({
-            actorFullName: entry.actorFullName,
-            folder,
-            tokenEnvVar: entry.tokenEnvVar,
-            dockerContextDir: normalizedDockerContextDir,
-            contextPaths,
-            envVars,
-        });
-    }
-
-    return selectActors(selection, actorConfigs);
-};
-
-export const setCwd = ({ workspace }: { workspace: string | undefined }) => {
-    if (workspace) {
-        process.chdir(workspace);
-        return;
-    }
-    const ghWorkspace = getEnvVar('GITHUB_WORKSPACE', process.cwd());
-    process.chdir(ghWorkspace);
 };

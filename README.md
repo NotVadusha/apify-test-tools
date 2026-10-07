@@ -12,55 +12,15 @@ npm i -D apify-test-tools
 
 - Requires `vitest` version `3.2.0` or later (uses [annotate](https://vitest.dev/guide/test-context.html#annotate))
 - Make sure `target` and `module` in your `tsconfig.json`'s `compilerOptions` are set to `ES2022`
+- Every Actor must already have at least one build under its default build tag (usually `latest`), built
+  from a Git repository version whose URL points to this repository. Build it once manually on the
+  platform before CI takes over. See [Repository check](#repository-check).
 
 ### 2. Create the config file
 
-Every repo that uses `apify-test-tools` must have an `apify-test-tools.config.json` file at the root. This file tells the tool which actors live in the repo, how to identify them, and which token to use.
+Every repo that uses `apify-test-tools` must have an `apify-test-tools.config.json` file at the root. It lists the actors in the repo, their folders, their full names on the platform, and which env var holds the token to use for each. A top-level `mode` field picks the file's layout; leave it out to use the default `"legacy"` layout.
 
-```json
-{
-    "actors": [
-        {
-            "folder": "actors/web-scraper",
-            "actorFullName": "myteam/web-scraper",
-            "tokenEnvVar": "APIFY_TOKEN_MYTEAM"
-        },
-        {
-            "folder": "actors/email-sender",
-            "actorFullName": "myteam/email-sender",
-            "tokenEnvVar": "APIFY_TOKEN_MYTEAM",
-            "overrideActorContext": ["actors/email-sender", "packages/shared"],
-            "envVars": {
-                "OPENAI_API_KEY": {
-                    "fromEnv": "SHARED_OPENAI_API_KEY",
-                    "isShared": true,
-                    "isSecret": true
-                }
-            }
-        }
-    ]
-}
-```
-
-Each entry has:
-
-| Field                  | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `folder`               | yes      | Relative path from repo root to the actor's own project directory — the folder that directly contains `.actor/actor.json` (i.e. `<folder>/.actor/actor.json`), the actor's README/CHANGELOG, and its source. Use `"."` for a single-actor repo where `.actor/` is at the root.                                                                                                                                                                                                                          |
-| `actorFullName`        | yes      | Full actor identifier in `owner/name` format (e.g. `"apify/web-scraper"`). This is the source of truth for the actor name — the `name` field in `actor.json` is not used.                                                                                                                                                                                                                                                                                                                               |
-| `tokenEnvVar`          | yes      | Name of the environment variable holding the Apify API token for this actor. No fallback — if the env var is not set at build time, the build fails.                                                                                                                                                                                                                                                                                                                                                    |
-| `overrideActorContext` | no       | Array of paths (relative to repo root) that define which files are relevant to this actor. When set, replaces the `dockerContextDir` from `actor.json` for change detection. Useful when an actor depends on shared packages outside its Docker build context. Entries must not be prefixes of one another (e.g. `["", "code"]` or `["actors", "actors/foo"]` are rejected). The actor's own `folder` is always part of its context — if none of the listed entries reach it, it's added automatically. |
-| `envVars`              | no       | Map of Actor environment-variable names to synchronization settings. `fromEnv` is the process/GitHub environment variable containing the value; `isSecret` controls Apify encryption; `isShared` defaults to `false` and includes the variable in test and debug versions when `true`.                                                                                                                                                                                                                  |
-
-### Environment variable synchronization
-
-`envVars` values are read from the process environment during a build. Production releases apply every configured entry. Test and local builds apply only entries with `isShared: true`. Existing variables with other names are preserved; removing an entry from the configuration does not delete it from Apify.
-
-For local builds of version `0.98`, supply the configured `fromEnv` values in your local shell environment. See [Build from local source](#build-from-local-source-no-push-needed) for an example.
-
-For GitHub Actions, update the shared workflow and its `run-with-apify-tokens.mjs` helper in the separate [`apify-store/github-actions-source`](https://github.com/apify-store/github-actions-source) repository. This package does not implement or verify that workflow change. The workflow must provide `ALL_SECRETS: ${{ toJSON(secrets) }}` and `ALL_VARS: ${{ toJSON(vars) }}` to the helper. A secret-backed entry uses `fromEnv` to name a GitHub secret; a non-secret entry uses the same field to name a GitHub Actions configuration variable. The helper must forward only declared names and never expose the context blobs to the build process.
-
-If a selected source is missing or empty, the build fails before updating any Actor version. Dry runs show destination names, source names, and flags, but never values. Updating a GitHub secret or variable takes effect the next time that Actor is built; it does not trigger a build by itself.
+See [Config file](#config-file) for the available modes and every field.
 
 ### 3. Set up actor folders
 
@@ -115,9 +75,110 @@ mkdir -p test/platform/core
 
 See the [GitHub workflows](#github-worklows) section below.
 
+## Config file
+
+`apify-test-tools.config.json` lives at the repo root and tells the tool which actors live in the repo, how to identify them, and which token to use.
+
+### Actor fields
+
+Every actor in the config is described by these fields, whatever the mode:
+
+| Field                  | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `folder`               | yes      | Relative path from repo root to the actor's own project directory — the folder that directly contains `.actor/actor.json` (i.e. `<folder>/.actor/actor.json`), the actor's README/CHANGELOG, and its source. Use `"."` for a single-actor repo where `.actor/` is at the root.                                                                                                                                                                                                                          |
+| `actorFullName`        | yes      | Full actor identifier in `owner/name` format (e.g. `"apify/web-scraper"`). This is the source of truth for the actor name — the `name` field in `actor.json` is not used.                                                                                                                                                                                                                                                                                                                               |
+| `tokenEnvVar`          | yes      | Name of the environment variable holding the Apify API token for this actor. In [grouped mode](#grouped-mode) it's inherited from the group unless the actor sets its own. No fallback — if the env var is not set at build time, the build fails.                                                                                                                                                                                                                                                      |
+| `overrideActorContext` | no       | Array of paths (relative to repo root) that define which files are relevant to this actor. When set, replaces the `dockerContextDir` from `actor.json` for change detection. Useful when an actor depends on shared packages outside its Docker build context. Entries must not be prefixes of one another (e.g. `["", "code"]` or `["actors", "actors/foo"]` are rejected). The actor's own `folder` is always part of its context — if none of the listed entries reach it, it's added automatically. |
+| `envVars`              | no       | Map of Actor environment-variable names to synchronization settings. `fromEnv` is the process/GitHub environment variable containing the value; `isSecret` controls Apify encryption; `isShared` defaults to `false` and includes the variable in test and debug versions when `true`.                                                                                                                                                                                                                  |
+
+### Modes
+
+The file's layout is picked by the top-level `mode` field. Each mode is a different way of writing the same thing: every mode resolves to a list of actors with the fields above, and the same rules apply to all of them — no two actors may share a `folder`, and no two entries may point at the same `actorFullName`. If `mode` is left out, [`"legacy"`](#legacy-mode) is used, so existing config files keep working unchanged.
+
+### Legacy mode
+
+The default. A flat `actors` array where every entry carries all of its settings. Good for repos with a few actors, or where every actor has different settings.
+
+```json
+{
+    "mode": "legacy",
+    "actors": [
+        {
+            "folder": "actors/web-scraper",
+            "actorFullName": "myteam/web-scraper",
+            "tokenEnvVar": "APIFY_TOKEN_MYTEAM"
+        },
+        {
+            "folder": "actors/email-sender",
+            "actorFullName": "myteam/email-sender",
+            "tokenEnvVar": "APIFY_TOKEN_MYTEAM",
+            "overrideActorContext": ["actors/email-sender", "packages/shared"],
+            "envVars": {
+                "OPENAI_API_KEY": {
+                    "fromEnv": "SHARED_OPENAI_API_KEY",
+                    "isShared": true,
+                    "isSecret": true
+                }
+            }
+        }
+    ]
+}
+```
+
+`actors` must hold at least one entry. Every entry takes all the [actor fields](#actor-fields) directly, and `tokenEnvVar` is required on each one.
+
+### Grouped mode
+
+Actors are organized into `groups`, and each group sets `tokenEnvVar` and `overrideActorContext` once for all of its actors. Good for repos where many actors share the same token or context.
+
+```json
+{
+    "mode": "grouped",
+    "groups": {
+        "myteam": {
+            "tokenEnvVar": "APIFY_TOKEN_MYTEAM",
+            "overrideActorContext": ["packages/shared"],
+            "actors": [
+                { "folder": "actors/web-scraper", "actorFullName": "myteam/web-scraper" },
+                {
+                    "folder": "actors/email-sender",
+                    "actorFullName": "myteam/email-sender",
+                    "overrideActorContext": ["actors/email-sender", "packages/mailer"]
+                }
+            ]
+        },
+        "partner": {
+            "tokenEnvVar": "APIFY_TOKEN_PARTNER",
+            "actors": [{ "folder": "actors/partner-crawler", "actorFullName": "partner/crawler" }]
+        }
+    }
+}
+```
+
+`groups` is an object with at least one group. The group key (`myteam`, `partner` above) is only a label for readability; it has no effect on the result, and it does not need to match any folder or username. Each group needs a `tokenEnvVar` and at least one actor, and can optionally set `overrideActorContext`.
+
+An actor inside a group can set its own `tokenEnvVar` or `overrideActorContext`, and that value replaces the group's for that actor only. Values are replaced, not merged: in the example above, `myteam/email-sender` gets `["actors/email-sender", "packages/mailer"]`, not `packages/shared` as well.
+
+### Environment variable synchronization
+
+`envVars` values are read from the process environment during a build. Production releases apply every configured entry. Test and local builds apply only entries with `isShared: true`. Existing variables with other names are preserved; removing an entry from the configuration does not delete it from Apify.
+
+For local builds of version `0.98`, supply the configured `fromEnv` values in your local shell environment. See [Build from local source](#build-from-local-source-no-push-needed) for an example.
+
+For GitHub Actions, forwarding configured `fromEnv` values requires a separate update to the shared workflows and their [`.github/scripts/run-with-apify-tokens.mjs`](.github/scripts/run-with-apify-tokens.mjs) helper in this repository. The bundled helper currently forwards Actor tokens only. The workflow must provide `ALL_SECRETS: ${{ toJSON(secrets) }}` and `ALL_VARS: ${{ toJSON(vars) }}` to the helper. A secret-backed entry uses `fromEnv` to name a GitHub secret; a non-secret entry uses the same field to name a GitHub Actions configuration variable. The helper must forward only declared names and never expose the context blobs to the build process.
+
+If a selected source is missing or empty, the build fails before updating any Actor version. Dry runs show destination names, source names, and flags, but never values. Updating a GitHub secret or variable takes effect the next time that Actor is built; it does not trigger a build by itself.
+
+Configure `envVars` on each actor entry in either legacy or grouped mode.
+
 ## Github worklows
 
-There should be 4 GH workflow files in `.github/workflows`.
+The reusable workflows live in this repo, alongside the package they call. They are the
+`public_`-prefixed files in `.github/workflows`; everything else there is this repo's own CI.
+Reference them at the `@workflows-v0` major tag, never at `@master` — see
+[Versioning and releases](#versioning-and-releases).
+
+There should be 4 GH workflow files in `.github/workflows`, plus an optional fifth for Claude reviews.
 
 ### `platform-tests-core.yaml`
 
@@ -132,7 +193,7 @@ on:
 
 jobs:
     platformTestsCore:
-        uses: apify-store/github-actions-source/.github/workflows/platform-tests.yaml@new_master
+        uses: apify/apify-test-tools/.github/workflows/public_platform-tests.yaml@workflows-v0
         with:
             subtest: core
         secrets: inherit
@@ -151,7 +212,7 @@ on:
 
 jobs:
     platformTestsDaily:
-        uses: apify-store/github-actions-source/.github/workflows/platform-tests.yaml@new_master
+        uses: apify/apify-test-tools/.github/workflows/public_platform-tests.yaml@workflows-v0
         secrets: inherit
 ```
 
@@ -166,7 +227,7 @@ on:
 
 jobs:
     buildDevelAndTest:
-        uses: apify-store/github-actions-source/.github/workflows/pr-build-test.yaml@new_master
+        uses: apify/apify-test-tools/.github/workflows/public_pr-build-test.yaml@workflows-v0
         secrets: inherit
 ```
 
@@ -181,9 +242,152 @@ on:
 
 jobs:
     buildLatest:
-        uses: apify-store/github-actions-source/.github/workflows/push-build-latest.yaml@new_master
+        uses: apify/apify-test-tools/.github/workflows/public_push-build-latest.yaml@workflows-v0
         secrets: inherit
 ```
+
+This workflow runs `apify-test-tools release --base-commit ${{ github.event.before }}`. See
+[Releasing Actors](#releasing-actors-release) for how the released range is determined and what to
+pass if you call the CLI from somewhere else.
+
+### `claude-review.yaml`
+
+Optional. Reviews a PR against the shared guidelines when you add the trigger label, and again on
+every push while that label is on.
+
+```yaml
+name: Claude review
+
+on:
+    pull_request:
+        types: [labeled, synchronize]
+
+jobs:
+    review:
+        uses: apify/apify-test-tools/.github/workflows/public_review.yaml@workflows-v0
+        secrets: inherit
+```
+
+The review instructions live in `.github/review-prompt.md` in this repo and are fetched at run time,
+because a reusable workflow doesn't get its own repo checked out. `prompt-ref` selects which ref to
+fetch them from and defaults to `workflows-v0`, so the instructions match the workflow you're calling — point
+it at a branch only to test a prompt change.
+
+### Secrets
+
+Callers pass `secrets: inherit`. The workflows do not turn every inherited secret into job-wide
+environment variables, so a secret is only visible to the step that needs it:
+
+| Secret                                                                    | Reaches                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NPM_TOKEN`                                                               | dependency install steps only, as both `NPM_TOKEN` and `NODE_AUTH_TOKEN`. Use a read-only token: npm granular tokens can be read-only, classic automation tokens can publish.                                          |
+| the Actor tokens named by `tokenEnvVar` in `apify-test-tools.config.json` | the `build`, `release`, and `delete-old-builds` steps only                                                                                                                                                             |
+| `TESTER_APIFY_TOKEN`                                                      | the vitest step only                                                                                                                                                                                                   |
+| `SLACK_TOKEN_TESTS_BOT` / `SLACK_TOKEN_RELEASES_BOT`                      | the reporting and release steps only                                                                                                                                                                                   |
+| `TESTER_APIFY_TOKEN_READ_ONLY`                                            | the Claude investigation step only, as the Apify MCP server's bearer token. Required by `public_platform-tests-claude-investigate-and-fix`. Use a read-only token: it reads the failing run, its log and its storages. |
+
+The Actor tokens are the one set that cannot be listed in the workflow, because each Actor names its
+own token via `tokenEnvVar` in `apify-test-tools.config.json`. Those steps pass
+`${{ toJSON(secrets) }}` as `ALL_SECRETS` and run the command through
+`.github/scripts/run-with-apify-tokens.mjs`, which reads that same config file to decide which
+secrets to pass on:
+
+```yaml
+- name: Build
+  env:
+      ALL_SECRETS: ${{ toJSON(secrets) }}
+  run: |
+      node "${{ steps.setup.outputs.scripts-path }}/run-with-apify-tokens.mjs" \
+        npx apify-test-tools build --target-branch ...
+```
+
+The wrapper passes only the tokens the config declares and drops `ALL_SECRETS`, so neither `npx` nor
+anything under `node_modules` sees the blob. Nothing is written to `$GITHUB_ENV`, so the tokens stay
+inside that one command rather than leaking into later steps. Reading the same file
+`apify-test-tools` reads means the two can't drift, and a secret that merely looks like an Actor
+token is not passed just because of its name.
+
+A token the config declares but the repo hasn't set is a warning, not a failure: a repo can carry an
+Actor whose token isn't configured and still build fine as long as that Actor never changes, and
+`apify-test-tools` raises a precise error naming the Actor at the point it actually needs the token.
+
+`scripts-path` comes from the setup action (give the step `id: setup`) and points at this repo's
+`.github/scripts/` directory inside the runner's action checkout, so workflows can run these helpers
+without checking this repo out again. The caller's workspace holds the caller's repo, not this one.
+
+Two tidier-looking alternatives don't work, so don't reach for them:
+
+- **Exporting to `$GITHUB_ENV`** would let the steps call `npx` directly with no wrapper, but
+  `$GITHUB_ENV` applies to every later step in the job. In `pr-build-test` the vitest step runs after
+  the build, so it would inherit Actor tokens it has no use for.
+- **Returning the tokens as a step output** would be scoped correctly, but the runner refuses to set
+  an output whose value contains a registered secret. It logs `Skip output <name> since it may
+contain secret` and leaves the output empty, so anything reading it downstream gets nothing.
+
+The `unitTest` job runs static checks and needs `NPM_TOKEN` only. No job runs `npm ci` with Apify or
+Slack credentials in scope, so a postinstall script in the dependency tree cannot read them.
+
+## Versioning and releases
+
+The workflows and the npm package live in one repo but ship on their own schedules. Two pointers
+decide what a consumer repo actually runs:
+
+| Pointer                             | What it selects                                | Moves when                                               |
+| ----------------------------------- | ---------------------------------------------- | -------------------------------------------------------- |
+| the `@workflows-v0` tag in `uses:`  | which workflows run                            | a master push, once the version below is published       |
+| `.github/workflows-package-version` | which `apify-test-tools` the workflows install | a stable release writes it; you may set it ahead of time |
+
+The setup action installs that **exact** version — not a range. A tag is therefore a complete
+statement: these workflows _and_ this library. The stable release writes the file into the same
+commit that bumps `package.json` and `CHANGELOG.md`, so a released commit always names the version
+it published, and rollout latency is unchanged: the release publishes and moves the tag in one run.
+
+Prereleases are excluded. Master pushes publish a `-beta` that consumer repos must never install, so
+the pin only moves on a stable release; betas stay reachable through the lockfile path in the setup
+action, which is how branch testing works.
+
+Nothing is coupled that doesn't need to be:
+
+- **Workflow-only change** — merge it. `workflows-v0` moves, it goes live, no release needed.
+- **Package-only change** — merge it, then cut a release when you want it out. The workflows are
+  unchanged, so consumers see nothing until the release lands.
+- **A workflow that calls a new CLI feature** — the one case that can break consumers, and the only
+  one with any ceremony. Put the package change, the workflow change, and the new pin in one PR. On
+  merge the tag is **held**: the CI job reports that the pinned version isn't on npm and leaves `workflows-v0`
+  where it is, so consumers keep running the previous workflows. Cut a stable release, and the tag
+  moves on its own. Run **Move major version tag** if you don't want to wait for the next master
+  push.
+
+`workflows-v0` moving on every master push means `@workflows-v0` is as live as `@master` was —
+there's no staging step, just a gate on the package version. What the tag buys you is a
+`workflows-v1` for breaking workflow changes, so repos migrate one at a time instead of all at once,
+and a way to roll back by pointing the tag at an earlier commit. Bump `MAJOR_TAG` in
+`.github/workflows/_move_major_tag.yaml` to cut the next major; the old tag then freezes where it is
+and keeps working.
+
+Freezing is real, which is the whole reason the version is pinned rather than a floor. A frozen `workflows-v0`
+points at a commit whose pinned version never changes, so it keeps installing the library it was
+tested against no matter how far the package moves on. Had the workflows installed `>=<floor>`, a
+frozen `workflows-v0` would still resolve to whatever is newest — and since the release that enables
+`workflows-v1` is usually the same release that breaks `workflows-v0`, the migration window would
+have been zero.
+
+The tag tracks the **workflows'** contract, not the npm package version. They move independently on
+purpose, so `@workflows-v0` is expected to stay `@workflows-v0` after the package reaches 1.0 —
+bump it when a workflow breaks its callers, not when the package does. Because `uses:` cannot take an expression, every ref
+into this repo repeats the tag literally; `check-major-tag-refs.mjs` fails the build if `MAJOR_TAG`
+and those refs disagree, which is the mistake that would otherwise ship silently during a bump.
+
+### Testing workflow changes
+
+- Point [testing-repo-for-github-actions](https://github.com/apify-store/testing-repo-for-github-actions)
+  at your branch (`uses: ...@your-branch`). It has real attached Actors and tests. Because the
+  package lives here too, a master push publishes a `beta`, and the lockfile-beta path in the setup
+  action installs that exact version — so one branch tests both halves of a change together.
+- To change the composite action itself, repoint the `uses:` refs inside the reusable workflows at
+  your branch as well, and change them back before merging.
+- Make sure the shell code actually works on your laptop first.
+- After merging, watch the workflow on a real project before moving on.
 
 ## Writing tests
 
@@ -411,7 +615,7 @@ The main local flow is:
 4. Build Actors on Apify (with your new code)
 5. Run tests against those builds. You can change tests and run on the same builds.
 
-`cd` into the actor repository you want to work with (or use `--workspace`).
+Run every command from the root of the actor repository you want to work with.
 
 #### 4. Build affected Actors
 
@@ -421,7 +625,6 @@ Requires `APIFY_TOKEN_<USERNAME>` for all Apify users that own your Actors (e.g.
 
 ```bash
 APIFY_TOKEN_JOHN_DOE=<token> \
-GITHUB_WORKSPACE=. \
   npx apify-test-tools build \
     --target-branch origin/master \
     --source-branch origin/my-dummy-branch \
@@ -436,11 +639,10 @@ Remove `--dry-run` to actually trigger builds and update the branch names/ The c
 
 #### Build from local source (no push needed)
 
-If you don't want to push a dummy branch just to test a change and wait for all the tests to finish, `build-from-local` builds Actors directly from your local files (zipped and uploaded as `SOURCE_FILES`), skipping steps 1-4 above.
+If you don't want to push a dummy branch just to test a change and wait for all the tests to finish, `build-from-local` builds Actors directly from your local files (zipped into the Actor's `actor-<id>-source` key-value store and built as `TARBALL`, like `apify push`), skipping steps 1-4 above.
 
 ```bash
 APIFY_TOKEN_JOHN_DOE=<token> \
-GITHUB_WORKSPACE=. \
   npx apify-test-tools build-from-local --actors john.doe/my-actor
 ```
 
@@ -451,7 +653,6 @@ For example, if the Actor's `envVars` configuration maps `OPENAI_API_KEY` from `
 ```bash
 export SHARED_OPENAI_API_KEY='<your local development key>'
 APIFY_TOKEN_JOHN_DOE=<token> \
-GITHUB_WORKSPACE=. \
   npx apify-test-tools build-from-local --actors john.doe/my-actor
 ```
 
@@ -462,8 +663,7 @@ Pass a hardcoded actor name via `--actors` to build only that Actor (comma-separ
 ```bash
 # Build from local source and capture output
 BUILDS=$(APIFY_TOKEN_JOHN_DOE=apify_api_xxx \
-  GITHUB_WORKSPACE=. \
-  npx apify-test-tools build-from-local --actors apify/my-actor)
+    npx apify-test-tools build-from-local --actors apify/my-actor)
 ```
 
 Since you already scoped the build to just the Actor(s) you care about, point vitest at a specific test file (or a `-t` name filter) instead of the whole `test/platform` directory — you get feedback on that one test without waiting for the full suite to run.
@@ -485,8 +685,7 @@ TESTER_APIFY_TOKEN=<token> \
 ```bash
 # Build and capture output
 BUILDS=$(APIFY_TOKEN_JOHN_DOE=apify_api_xxx \
-  GITHUB_WORKSPACE=. \
-  npx apify-test-tools build \
+    npx apify-test-tools build \
     --target-branch origin/master \
     --source-branch origin/my-dummy-branch)
 
@@ -496,10 +695,67 @@ TESTER_APIFY_TOKEN=apify_api_yyy \
   npx vitest --run --maxConcurrency 20 --fileParallelism=true --maxWorkers 100 test/platform
 ```
 
+### Releasing Actors (`release`)
+
+`release` builds the `latest` (default) version of every Actor changed since the last release and
+posts release notes to Slack. It reads everything else from git: the branch from the checked-out
+`HEAD`, the commits and changed files from the range `<base-commit>..HEAD`, and the repository from
+the `origin` remote.
+
+```bash
+npx apify-test-tools release --base-commit <sha> --release-slack-channel "#releases" --dry-run
+```
+
+#### `--base-commit`
+
+The last commit that is **already released**. Everything after it, up to `HEAD`, is released. It is
+required: git alone can't tell which commits a push brought, and guessing wrong silently leaves Actors
+on old code.
+
+The changed files come from diffing `<base-commit>` and `HEAD` directly, so this works for every
+merge strategy as long as the base commit is the branch tip from **before** the push:
+
+| Merge strategy                 | What lands on the branch          | What to pass                                                           |
+| ------------------------------ | --------------------------------- | ---------------------------------------------------------------------- |
+| Squash and merge               | 1 new commit                      | the push's "before" commit (`HEAD~1` also works)                       |
+| Merge commit                   | the PR's commits + 1 merge commit | the push's "before" commit (`HEAD^1`, the first parent, also works)    |
+| Rebase and merge / direct push | N new commits                     | the push's "before" commit (`HEAD~1` would miss the first N-1 commits) |
+
+On GitHub, the push's "before" commit is `${{ github.event.before }}`, which the reusable workflow
+passes for you. On other CIs use the equivalent, e.g. `$CI_COMMIT_BEFORE_SHA` on GitLab. The checkout
+needs the full history (`fetch-depth: 0` in `actions/checkout`) so the base commit is available locally.
+
+`release` fails instead of guessing when:
+
+- the base commit is all zeros (GitHub sends this for a push that created the branch)
+- the base commit isn't in the local history (shallow checkout) or isn't an ancestor of `HEAD`
+  (the branch was force-pushed)
+
+In those cases, rerun `release` with a `--base-commit` you pick yourself: an ancestor of `HEAD` from
+before the changes you want to release (for a shallow checkout, fetch the full history instead).
+`--actors` only narrows which of the changed Actors get released; it never forces a build, so on its
+own it doesn't get past these errors.
+If `HEAD` is the base commit, there is nothing to release and the command exits successfully.
+
+A failed release isn't retried by the next push: that push's base commit is the failed one's head, so
+its changes are skipped. Re-run the failed workflow run, or release the Actors manually.
+
+#### Repository check
+
+`release` and `build` point each Actor's version at the `origin` remote. Because a build overwrites the
+version's Git URL, building from a fork or a mirror would repoint the Actor. So, before building, the
+remote is compared with the Git URL of the Actor's default version (the one its default build tag
+points to), and the command fails if they differ or if the default version isn't built from a Git
+repository. The URL form doesn't matter (`https://github.com/org/repo` equals
+`git@github.com:org/repo.git`).
+
+To build from a different repository on purpose, e.g. when moving an Actor, pass `--repo-url`. That
+skips the check.
+
 #### Dev mode
 
 For development on `apify-test-tools` itself, use `tsx` directly:
 
 ```bash
-GITHUB_WORKSPACE=local-clone tsx bin/main.ts get-actor-configs
+cd local-clone && tsx ../bin/main.ts get-actor-configs
 ```

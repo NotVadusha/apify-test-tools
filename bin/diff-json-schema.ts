@@ -1,5 +1,6 @@
+import { logger } from './logger.js';
 import type { Commit } from './types.js';
-import { spawnCommandInGhWorkspace } from './utils.js';
+import { spawnCommand } from './utils.js';
 
 const COSMETIC_JSON_FIELD_NAMES = new Set([
     'title',
@@ -35,13 +36,13 @@ export const isCosmeticOnlyJsonSchemaChange = (commits: Commit[], changedFilepat
     let oldJson: unknown;
     let newJson: unknown;
     try {
-        const oldContent = spawnCommandInGhWorkspace(`git show ${oldRef}:${changedFilepath}`);
-        const newContent = spawnCommandInGhWorkspace(`git show ${newRef}:${changedFilepath}`);
+        const oldContent = spawnCommand(`git show ${oldRef}:${changedFilepath}`);
+        const newContent = spawnCommand(`git show ${newRef}:${changedFilepath}`);
 
         oldJson = JSON.parse(oldContent);
         newJson = JSON.parse(newContent);
     } catch {
-        console.error(
+        logger.info(
             `Failed to get or parse JSON content for ${changedFilepath} at refs ${oldRef} and ${newRef}, maybe it is new file or deleted? Treating it as a non-cosmetic change.`,
         );
         return false;

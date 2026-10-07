@@ -3,10 +3,34 @@
 All notable changes to this project will be documented in this file.
 
 <!-- git-cliff-unreleased-start -->
-## 0.9.1 - **not yet released**
+## 0.10.1 - **not yet released**
+
+### 🐛 Bug Fixes
+
+- **internal-workflows:** Wait out npm&#x27;s async publish before holding the major tag ([#160](https://github.com/apify/apify-test-tools/pull/160)) ([78434f0](https://github.com/apify/apify-test-tools/commit/78434f03d288ecbd383d55d56a1610f06ded298f)) by [@metalwarrior665](https://github.com/metalwarrior665)
+- Skip builds and tests when the net diff is empty ([#171](https://github.com/apify/apify-test-tools/pull/171)) ([874d70c](https://github.com/apify/apify-test-tools/commit/874d70ca5506f7ec742a1808c9bf6c670f08552c)) by [@artogahr](https://github.com/artogahr)
 
 
 <!-- git-cliff-unreleased-end -->
+## [0.10.0](https://github.com/apify/apify-test-tools/releases/tag/v0.10.0) (2026-09-30)
+
+### 🚀 Features
+
+- **config/modes:** Lay groundwork for multiple configuration structures ([#142](https://github.com/apify/apify-test-tools/pull/142)) ([7e18638](https://github.com/apify/apify-test-tools/commit/7e18638a8d3523154dbe819312c2b16b54c548ff)) by [@JuanGalilea](https://github.com/JuanGalilea)
+- **workflows:** Host the reusable GitHub workflows in this repo ([#120](https://github.com/apify/apify-test-tools/pull/120)) ([10f089d](https://github.com/apify/apify-test-tools/commit/10f089d85146ceb7cdae964cfa1fc2577df43a37)) by [@metalwarrior665](https://github.com/metalwarrior665)
+- **mode:** Add grouped config mode ([#143](https://github.com/apify/apify-test-tools/pull/143)) ([9d0b93e](https://github.com/apify/apify-test-tools/commit/9d0b93e194a2cd810a31bcef4ca9457fd9ebfb9b)) by [@JuanGalilea](https://github.com/JuanGalilea)
+
+### 🐛 Bug Fixes
+
+- Apply default actor timeout to runs ([#134](https://github.com/apify/apify-test-tools/pull/134)) ([82f5f7d](https://github.com/apify/apify-test-tools/commit/82f5f7d4de990db7ad8edf940c19ffd6b20bad13)) by [@Patai5](https://github.com/Patai5)
+- Copy cli to zip to KV store local builds ([#151](https://github.com/apify/apify-test-tools/pull/151)) ([ecdda58](https://github.com/apify/apify-test-tools/commit/ecdda58b68a8c7173a023e3a92689bc4fa0ce53c)) by [@gytelio](https://github.com/gytelio), closes [#140](https://github.com/apify/apify-test-tools/issues/140)
+
+### 🚜 Refactor
+
+- **workflows:** [**breaking**] Rename the floating tag to workflows-v0 ([#146](https://github.com/apify/apify-test-tools/pull/146)) ([c48fb22](https://github.com/apify/apify-test-tools/commit/c48fb223c885c4e5de7e5f64d8c14f6d03fcc7de)) by [@metalwarrior665](https://github.com/metalwarrior665)
+- **bin:** [**breaking**] Remove GitHub event dependency from release command ([#153](https://github.com/apify/apify-test-tools/pull/153)) ([e6953aa](https://github.com/apify/apify-test-tools/commit/e6953aa095d1a92638c6d72441e1b312d9f835c3)) by [@metalwarrior665](https://github.com/metalwarrior665), closes [#131](https://github.com/apify/apify-test-tools/issues/131)
+
+
 ## [0.9.0](https://github.com/apify/apify-test-tools/releases/tag/v0.9.0) (2026-08-11)
 
 ### 🚀 Features

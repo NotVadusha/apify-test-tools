@@ -1,0 +1,46 @@
+name: Build latest and report to slack
+
+on:
+    workflow_call:
+        inputs:
+            # Defaults to #notif-<repo-name> when empty, matching the previous behavior.
+            report-slack-channel:
+                type: string
+                default: ''
+                required: false
+
+jobs:
+    pushBuildLatest:
+        name: 'Build latest: ${{github.repository}} ${{github.event.head_commit.message}}'
+        if: |
+            !contains(github.event.head_commit.message, '[skip ci]') &&
+            !contains(github.event.head_commit.message, '[skip platform-test]')
+
+        runs-on: ubuntu-latest
+        steps:
+            - name: Setup repository and dependencies
+              id: setup
+              # For testing, you have to temporarily change the branch
+              uses: apify/apify-test-tools/.github/actions/checkout-restore-dependencies@workflows-v0
+              with:
+                  npm-token: ${{ secrets.NPM_TOKEN }}
+
+            # --base-commit is the last commit that is already released: the push's "before" commit.
+            # Everything after it up to HEAD gets released. See the "Releasing Actors" section of the README.
+            # run-with-apify-tokens.mjs reads the token names from in apify-test-tools.config.json
+            # and hands the build those secrets and nothing else, so the tokens stay in this one command instead of the whole job.
+            # The library never sees secrets it doesn't need
+            - name: Release Actors and notify
+              env:
+                  ALL_SECRETS: ${{ toJSON(secrets) }}
+                  SLACK_TOKEN_RELEASES_BOT: ${{ secrets.SLACK_TOKEN_RELEASES_BOT }}
+              run: |
+                  node "${{ steps.setup.outputs.scripts-path }}/run-with-apify-tokens.mjs" \
+                    npx apify-test-tools release --base-commit ${{ github.event.before }} --release-slack-channel "#delivery-public-actors" --report-slack-channel "${{ inputs.report-slack-channel || format('#notif-{0}', github.event.repository.name) }}" --use-docker-cache
+
+            - name: Delete old builds
+              env:
+                  ALL_SECRETS: ${{ toJSON(secrets) }}
+              run: |
+                  node "${{ steps.setup.outputs.scripts-path }}/run-with-apify-tokens.mjs" \
+                    npx apify-test-tools delete-old-builds

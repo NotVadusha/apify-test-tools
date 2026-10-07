@@ -1,64 +1,84 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --no-warnings
 
 import process from 'node:process';
 
-import yargs, { type Argv } from 'yargs';
+import yargs, { type Options } from 'yargs';
 // eslint-disable-next-line import/extensions --- With .js, it cannot find types
 import { hideBin } from 'yargs/helpers';
 
 import { deleteOldBuilds, runBuilds } from './build.js';
 import { runBuildsFromLocal } from './build-from-local.js';
 import { getChangedActors } from './diff-changes.js';
-import { getBranchOnlyChangedFiles, getChangedFiles, getCommits, hasMergeFromTarget } from './git.js';
-import { getPushData } from './github.js';
+import {
+    getBranchOnlyChangedFiles,
+    getChangedFiles,
+    getCommits,
+    getCurrentBranch,
+    getReleaseChanges,
+    getRepoName,
+    hasMergeFromTarget,
+    resolveReleaseBaseCommit,
+    resolveRepoUrl,
+} from './git.js';
+import { logger, logLevels } from './logger.js';
+import { writeJson } from './output.js';
 import { notifyToSlack } from './slack.js';
 import { reportTestResults } from './test-report.js';
 import type { Config } from './types.js';
-import { readConfigFile, setCwd, spawnCommandInGhWorkspace } from './utils.js';
+import { readConfigFile } from './utils/config/load-config.js';
 
 /**
  * Middlewares to be run before every command execution
  */
-const middlewares = [setCwd];
+const middlewares = [(args: { logLevel: (typeof logLevels)[number] }) => logger.setLevel(args.logLevel)];
 
-export const buildOptions = <T>(y: Argv<T>) => {
-    return y
-        .option('target-branch', {
-            type: 'string',
-            demandOption: true,
-        })
-        .option('source-branch', {
-            type: 'string',
-            demandOption: true,
-        })
-        .option('use-docker-cache', {
-            type: 'boolean',
-            default: false,
-        })
-        .option('base-commit', {
-            type: 'string',
-            demandOption: false,
-        });
-};
+/*
+ * Option groups shared across commands. Each is a plain object passed to `.options()`, so a command's
+ * builder composes them by chaining (`y.options(gitRangeOptions).options(actorSelectionOptions)`)
+ * instead of nesting wrapper functions. `as const` keeps literals like `demandOption: true` so yargs
+ * can infer non-optional types; `satisfies` validates the shape without widening it.
+ */
+
+/** Commit range to inspect: everything on `source-branch` since it diverged from `target-branch`. */
+const gitRangeOptions = {
+    'target-branch': { type: 'string', demandOption: true },
+    'source-branch': { type: 'string', demandOption: true },
+    'base-commit': { type: 'string', demandOption: false },
+} as const satisfies Record<string, Options>;
+
+/**
+ * Where to build the Actors from. Defaults to the `origin` remote, which is then checked against each
+ * Actor's default version. Passing it explicitly skips that check (see assertRepoUrlMatchesDefaultVersion).
+ */
+const repoUrlOptions = {
+    'repo-url': { type: 'string' },
+} as const satisfies Record<string, Options>;
 
 /**
  * Actor-selection flags, applied to every command that reads the actor config so a caller can
  * narrow the set it operates on (e.g. two-stage releases: `--ignore X`, then `--actors X`).
- * Kept separate from `buildOptions` so the read-only git commands don't advertise flags they ignore.
+ * Kept separate from `gitRangeOptions` so the read-only git commands don't advertise flags they ignore.
  */
-export const actorSelectionOptions = <T>(y: Argv<T>) => {
-    return y
-        .option('actors', {
-            type: 'string',
-            array: true,
-            default: [] as string[],
-        })
-        .option('ignore', {
-            type: 'string',
-            array: true,
-            default: [] as string[],
-        });
-};
+const actorSelectionOptions = {
+    actors: { type: 'string', array: true, default: [] as string[] },
+    ignore: { type: 'string', array: true, default: [] as string[] },
+} as const satisfies Record<string, Options>;
+
+/** Flags for commands that trigger Apify builds. */
+const buildOptions = {
+    'use-docker-cache': { type: 'boolean', default: false },
+} as const satisfies Record<string, Options>;
+
+/** Global flags, available to every command. */
+const globalOptions = {
+    'log-level': {
+        type: 'string',
+        choices: logLevels,
+        default: 'info',
+        describe: 'Minimum diagnostic level written to stderr; silent disables logging',
+    },
+    'dry-run': { type: 'boolean', default: false },
+} as const satisfies Record<string, Options>;
 
 const resolveChangedActors = async (config: Config, { isLatest }: { isLatest: boolean }) => {
     const actorConfigs = await readConfigFile(config);
@@ -69,7 +89,7 @@ const resolveChangedActors = async (config: Config, { isLatest }: { isLatest: bo
     // Exception: if the branch has any functional changes alongside the merge, we must re-test — even
     // individually validated changes can have novel interactions when combined.
     if (hasMergeFromTarget(config.sourceBranch, config.targetBranch)) {
-        console.error(
+        logger.info(
             '[MERGE-FROM-TARGET-OPTIMIZATION]: There is merge from target branch, checking if there are no functional changes in our own branch. If so, we can skip tests',
         );
         const branchOnlyFiles = getBranchOnlyChangedFiles(config.sourceBranch, config.targetBranch);
@@ -81,10 +101,10 @@ const resolveChangedActors = async (config: Config, { isLatest }: { isLatest: bo
             commits: allBranchCommits,
         });
         if (branchOnlyActorsChanged.length === 0) {
-            console.error('[MERGE-FROM-TARGET-OPTIMIZATION]: Branch itself has no functional changes, skipping tests');
+            logger.info('[MERGE-FROM-TARGET-OPTIMIZATION]: Branch itself has no functional changes, skipping tests');
             return [];
         }
-        console.error(
+        logger.info(
             `[MERGE-FROM-TARGET-OPTIMIZATION]: Branch has ${branchOnlyActorsChanged.length} functional changes, cannot optimize, we continue with full check`,
         );
     }
@@ -97,47 +117,61 @@ const resolveChangedActors = async (config: Config, { isLatest }: { isLatest: bo
 
 await yargs()
     .scriptName('public-actors-utils')
-    .option('dry-run', {
-        type: 'boolean',
-        default: false,
-    })
-    .option('workspace', {
-        type: 'string',
-    })
+    .options(globalOptions)
     .middleware(middlewares)
-    .command('get-commits', '', buildOptions, (args) => {
-        const commits = getCommits(args);
-        console.log(JSON.stringify(commits));
-    })
-    .command('get-latest-commit', '', buildOptions, (args) => {
-        const commits = getCommits(args);
-        if (commits.length > 0) {
-            console.log(JSON.stringify(commits[commits.length - 1]));
-        }
-    })
-    .command('get-changed-files', '', buildOptions, (args) => {
-        const commits = getCommits(args);
-        const changedFiles = getChangedFiles(commits);
-        console.log(JSON.stringify(changedFiles));
-    })
-    .command('get-actor-configs', '', actorSelectionOptions, async ({ actors, ignore }) => {
-        const actorConfigs = await readConfigFile({ actors, ignore });
-        console.log(JSON.stringify(actorConfigs));
-    })
+    .command(
+        'get-commits',
+        '',
+        (y) => y.options(gitRangeOptions),
+        (args) => {
+            const commits = getCommits(args);
+            writeJson(commits);
+        },
+    )
+    .command(
+        'get-latest-commit',
+        '',
+        (y) => y.options(gitRangeOptions),
+        (args) => {
+            const commits = getCommits(args);
+            if (commits.length > 0) {
+                writeJson(commits[commits.length - 1]);
+            }
+        },
+    )
+    .command(
+        'get-changed-files',
+        '',
+        (y) => y.options(gitRangeOptions),
+        (args) => {
+            const commits = getCommits(args);
+            const changedFiles = getChangedFiles(commits);
+            writeJson(changedFiles);
+        },
+    )
+    .command(
+        'get-actor-configs',
+        '',
+        (y) => y.options(actorSelectionOptions),
+        async ({ actors, ignore }) => {
+            const actorConfigs = await readConfigFile({ actors, ignore });
+            writeJson(actorConfigs);
+        },
+    )
     .command(
         'get-affected-actors',
         '',
-        (args) => actorSelectionOptions(buildOptions(args)),
+        (y) => y.options(gitRangeOptions).options(actorSelectionOptions),
         async (config) => {
             const actorsChanged = await resolveChangedActors(config, { isLatest: false });
-            console.log(JSON.stringify(actorsChanged));
+            writeJson(actorsChanged);
         },
     )
     .command(
         'report-tests',
         '',
-        (args) =>
-            args
+        (y) =>
+            y
                 .option('report-file', { type: 'string', demandOption: true })
                 .option('report-slack-channel', { type: 'string' })
                 .option('job-url', { type: 'string' })
@@ -149,40 +183,43 @@ await yargs()
     .command(
         'build',
         '',
-        (args) => actorSelectionOptions(buildOptions(args)).option('dry-run', { type: 'boolean', default: false }),
+        (y) => y.options(gitRangeOptions).options(actorSelectionOptions).options(buildOptions).options(repoUrlOptions),
         async (config) => {
             const actorsChanged = await resolveChangedActors(config, { isLatest: false });
-            // https://github.com/apify-store/google-maps#:actors/lukaskrivka_google-maps-with-contact-details
-            // git@github.com:apify-store/google-maps#:actors/lukaskrivka_google-maps-with-contact-details
-            const repoUrl = spawnCommandInGhWorkspace(`git remote get-url origin`).replace(
-                /^https:\/\/github\.com\//,
-                'git@github.com:',
-            );
-
             const builds = await runBuilds({
-                repoUrl,
+                ...resolveRepoUrl(config.repoUrl),
                 actorConfigs: actorsChanged,
                 branch: config.sourceBranch.replace('origin/', ''),
                 dryRun: config.dryRun,
                 useDockerCache: config.useDockerCache,
             });
-            console.log(JSON.stringify(builds));
+            writeJson(builds);
         },
     )
     .command(
         'release',
         '',
-        (args) =>
-            actorSelectionOptions(args)
-                .option('push-event-path', { type: 'string', demandOption: true })
-                .option('dry-run', { type: 'boolean', default: false })
+        (y) =>
+            y
+                .options(actorSelectionOptions)
+                .options(buildOptions)
+                .options(repoUrlOptions)
+                // The last commit that is already released, everything after it up to HEAD gets released.
+                // Required, see the README section "Releasing Actors" for how to set it for each merge strategy.
+                .option('base-commit', { type: 'string', demandOption: true })
                 .option('report-slack-channel', { type: 'string' })
-                .option('release-slack-channel', { type: 'string' })
-                .option('use-docker-cache', { type: 'boolean', default: false }),
+                .option('release-slack-channel', { type: 'string' }),
         async (args) => {
-            const { branch, changedFiles, repoUrl, commits, changelog, repository, author } = await getPushData(
-                args.pushEventPath,
-            );
+            const baseSha = resolveReleaseBaseCommit(args.baseCommit);
+            const branch = getCurrentBranch();
+            const changes = getReleaseChanges(baseSha);
+            if (!changes) {
+                logger.info(`HEAD is the base commit ${baseSha}, there is nothing new to release`);
+                return;
+            }
+            const { commits, changedFiles, changelog } = changes;
+            const { repoUrl, shouldVerifyRepoUrl } = resolveRepoUrl(args.repoUrl);
+
             const isLatest = true;
             const actorConfigs = await readConfigFile(args);
             const actorsChanged = getChangedActors({
@@ -195,20 +232,22 @@ await yargs()
             const builds = await runBuilds({
                 isLatest,
                 repoUrl,
+                shouldVerifyRepoUrl,
                 actorConfigs: actorsChanged,
                 branch,
                 dryRun,
                 useDockerCache: args.useDockerCache,
             });
-            console.error(JSON.stringify(builds));
+            logger.info(JSON.stringify(builds));
 
             await notifyToSlack({
                 changedFiles,
                 commits,
                 changelog,
-                repository,
+                repository: getRepoName(repoUrl),
                 dryRun,
-                author,
+                // The newest commit, same as the pushed head commit
+                author: commits[commits.length - 1].author,
                 reportSlackChannel,
                 releaseSlackChannel,
             });
@@ -217,17 +256,22 @@ await yargs()
     .command(
         'build-from-local',
         '',
-        (args) => actorSelectionOptions(args).option('dry-run', { type: 'boolean', default: false }),
+        (y) => y.options(actorSelectionOptions),
         async ({ actors, ignore, dryRun }) => {
             const actorConfigs = await readConfigFile({ actors, ignore });
             const builds = await runBuildsFromLocal({ actorConfigs, dryRun });
-            console.log(JSON.stringify(builds));
+            writeJson(builds);
         },
     )
-    .command('delete-old-builds', '', actorSelectionOptions, async ({ actors, ignore }) => {
-        const actorConfigs = await readConfigFile({ actors, ignore });
-        await deleteOldBuilds(actorConfigs);
-    })
+    .command(
+        'delete-old-builds',
+        '',
+        (y) => y.options(actorSelectionOptions),
+        async ({ actors, ignore }) => {
+            const actorConfigs = await readConfigFile({ actors, ignore });
+            await deleteOldBuilds(actorConfigs);
+        },
+    )
     .strictCommands()
     .demandCommand(1, 'Command is required')
     .fail((msg, err, yargsInstance) => {
@@ -235,11 +279,11 @@ await yargs()
         // or a missing config file) arrive here as `err`. A malformed selection must fail loudly
         // rather than silently operate on the wrong set of actors — print the message, no stack.
         if (err) {
-            console.error(`[ERROR]: ${err.message}`);
+            logger.error(`[ERROR]: ${err.message}`);
         } else {
             // Argument-parsing/validation failure — keep yargs' usage output.
-            console.error(yargsInstance.help());
-            console.error(`\n${msg}`);
+            logger.error(yargsInstance.help());
+            logger.error(`\n${msg}`);
         }
         process.exit(1);
     })

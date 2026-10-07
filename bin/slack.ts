@@ -1,5 +1,6 @@
 import { WebClient } from '@slack/web-api';
 
+import { logger } from './logger.js';
 import type { Commit } from './types.js';
 import { getEnvVar } from './utils.js';
 
@@ -14,6 +15,9 @@ type NotifyToSlackOptions = {
     reportSlackChannel?: string;
 };
 
+// Git authors come as "Name<email>", Slack only needs the name
+const displayName = (author: string) => author.replace(/\s*<[^>]*>$/, '');
+
 export const notifyToSlack = async ({
     changedFiles,
     commits,
@@ -27,17 +31,17 @@ export const notifyToSlack = async ({
     const slack = new WebClient(getEnvVar('SLACK_TOKEN_RELEASES_BOT'));
 
     if (!changelog) {
-        console.warn('No new changelog entries found, did you forget to update it?');
+        logger.warn('No new changelog entries found, did you forget to update it?');
     }
 
-    let shortMessage = `*${repository}* – New release (by ${author}):\n\n`;
+    let shortMessage = `*${repository}* – New release (by ${displayName(author)}):\n\n`;
 
     // This one is just for broader public that only cares about public facing changes
     if (changelog && releaseSlackChannel) {
         shortMessage += `*Additions to the changelog*:\n\n${changelog}\n`;
-        console.error(`=========================================`);
-        console.error(`**Sending slack message to channel**: ${releaseSlackChannel}.\n\n${shortMessage}`);
-        console.error(`=========================================`);
+        logger.info(`=========================================`);
+        logger.info(`**Sending slack message to channel**: ${releaseSlackChannel}.\n\n${shortMessage}`);
+        logger.info(`=========================================`);
         if (!dryRun) {
             await slack.chat.postMessage({
                 channel: releaseSlackChannel,
@@ -49,7 +53,7 @@ export const notifyToSlack = async ({
     const commitsMessage = `${commits
         .map(
             ({ author: commitAuthor, message }, index) =>
-                `${index + 1}. Commit message: ${message}\n\tAuthor: ${commitAuthor}.`,
+                `${index + 1}. Commit message: ${message}\n\tAuthor: ${displayName(commitAuthor)}.`,
         )
         .join('\n')}`;
     const changedFilesMessage = `*Files changed*: ${changedFiles.map((file) => `\`${file}\``).join(', ')}`;
@@ -57,9 +61,9 @@ export const notifyToSlack = async ({
 
     // This one is for devs and project managers that need to know more details
     if (reportSlackChannel) {
-        console.error(`=========================================`);
-        console.error(`Sending slack message to channel: ${reportSlackChannel}.\n\n${longMessage}`);
-        console.error(`=========================================`);
+        logger.info(`=========================================`);
+        logger.info(`Sending slack message to channel: ${reportSlackChannel}.\n\n${longMessage}`);
+        logger.info(`=========================================`);
         if (!dryRun) {
             await slack.chat.postMessage({
                 text: longMessage,
