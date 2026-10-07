@@ -56,6 +56,8 @@ Each entry has:
 
 `envVars` values are read from the process environment during a build. Production releases apply every configured entry. Test and local builds apply only entries with `isShared: true`. Existing variables with other names are preserved; removing an entry from the configuration does not delete it from Apify.
 
+For local builds of version `0.98`, supply the configured `fromEnv` values in your local shell environment. See [Build from local source](#build-from-local-source-no-push-needed) for an example.
+
 For GitHub Actions, update the shared workflow and its `run-with-apify-tokens.mjs` helper in the separate [`apify-store/github-actions-source`](https://github.com/apify-store/github-actions-source) repository. This package does not implement or verify that workflow change. The workflow must provide `ALL_SECRETS: ${{ toJSON(secrets) }}` and `ALL_VARS: ${{ toJSON(vars) }}` to the helper. A secret-backed entry uses `fromEnv` to name a GitHub secret; a non-secret entry uses the same field to name a GitHub Actions configuration variable. The helper must forward only declared names and never expose the context blobs to the build process.
 
 If a selected source is missing or empty, the build fails before updating any Actor version. Dry runs show destination names, source names, and flags, but never values. Updating a GitHub secret or variable takes effect the next time that Actor is built; it does not trigger a build by itself.
@@ -441,6 +443,19 @@ APIFY_TOKEN_JOHN_DOE=<token> \
 GITHUB_WORKSPACE=. \
   npx apify-test-tools build-from-local --actors john.doe/my-actor
 ```
+
+Local source builds use Actor version `0.98` on the Apify platform. Before building, the command synchronizes configured `envVars` entries marked `isShared: true` from your local process environment to that version. It does not fetch values from GitHub or another Actor version, and it does not automatically load `.env` files.
+
+For example, if the Actor's `envVars` configuration maps `OPENAI_API_KEY` from `SHARED_OPENAI_API_KEY` with `isShared: true`, export the source value before running the command:
+
+```bash
+export SHARED_OPENAI_API_KEY='<your local development key>'
+APIFY_TOKEN_JOHN_DOE=<token> \
+GITHUB_WORKSPACE=. \
+  npx apify-test-tools build-from-local --actors john.doe/my-actor
+```
+
+Supply every selected `fromEnv` value locally; missing or empty values fail before any Actor version is updated. Keep secret values out of committed files.
 
 Pass a hardcoded actor name via `--actors` to build only that Actor (comma-separate multiple names). Omit `--actors` to build all Actors in the repo, or add `--dry-run` to preview without building. It outputs the same JSON build array as `build`, so you run tests against it the same way as in step 5 below:
 
